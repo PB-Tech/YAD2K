@@ -10,17 +10,21 @@ import configparser
 import io
 import os
 from collections import defaultdict
+import tensorflow as tf
 
 import numpy as np
 from keras import backend as K
-from keras.layers import (Conv2D, GlobalAveragePooling2D, Input, Lambda,
-                          MaxPooling2D)
+from keras.layers import (Conv2D, GlobalAveragePooling2D, Lambda,
+                          MaxPooling2D ,convolutional)
 from keras.layers.advanced_activations import LeakyReLU
-from keras.layers.merge import concatenate
+# from keras.layers.merge import concatenate
+from keras.engine.topology import merge
 from keras.layers.normalization import BatchNormalization
-from keras.models import Model
+from keras.engine.training import Model
+from keras.engine.topology import Input
 from keras.regularizers import l2
-from keras.utils.vis_utils import plot_model as plot
+# from keras.utils.vis_utils import plot_model as plot
+from keras.utils.visualize_util import plot
 
 from yad2k.models.keras_yolo import (space_to_depth_x2,
                                      space_to_depth_x2_output_shape)
@@ -176,20 +180,29 @@ def _main(args):
                         activation, section))
 
             # Create Conv2D layer
+            # conv_layer = (Conv2D(
+            #     filters, (size, size),
+            #     strides=(stride, stride),
+            #     kernel_regularizer=l2(weight_decay),
+            #     use_bias=not batch_normalize,
+            #     weights=conv_weights,
+            #     activation=act_fn,
+            #     padding=padding))(prev_layer)
+
             conv_layer = (Conv2D(
-                filters, (size, size),
-                strides=(stride, stride),
-                kernel_regularizer=l2(weight_decay),
-                use_bias=not batch_normalize,
+                filters, size, size,
+                subsample=(stride, stride),
+                # W_regularizer=l2(weight_decay),
+                # b_regularizer=l2(weight_decay),
+                activity_regularizer=l2(weight_decay),
+                bias=not batch_normalize,
                 weights=conv_weights,
                 activation=act_fn,
-                padding=padding))(prev_layer)
-
+                border_mode=padding))(prev_layer)
             if batch_normalize:
                 conv_layer = (BatchNormalization(
                     weights=bn_weight_list))(conv_layer)
             prev_layer = conv_layer
-
             if activation == 'linear':
                 all_layers.append(prev_layer)
             elif activation == 'leaky':
@@ -202,7 +215,7 @@ def _main(args):
             stride = int(cfg_parser[section]['stride'])
             all_layers.append(
                 MaxPooling2D(
-                    padding='same',
+                    border_mode='same',
                     pool_size=(size, size),
                     strides=(stride, stride))(prev_layer))
             prev_layer = all_layers[-1]
@@ -218,7 +231,7 @@ def _main(args):
             layers = [all_layers[i] for i in ids]
             if len(layers) > 1:
                 print('Concatenating route layers:', layers)
-                concatenate_layer = concatenate(layers)
+                concatenate_layer = merge(layers ,mode='concat')
                 all_layers.append(concatenate_layer)
                 prev_layer = concatenate_layer
             else:
@@ -249,7 +262,8 @@ def _main(args):
                 'Unsupported section header type: {}'.format(section))
 
     # Create and save model.
-    model = Model(inputs=all_layers[0], outputs=all_layers[-1])
+    print(all_layers)
+    model = Model(input=all_layers[0], output=all_layers[-1])
     print(model.summary())
     model.save('{}'.format(output_path))
     print('Saved Keras model to {}'.format(output_path))
@@ -259,7 +273,7 @@ def _main(args):
     print('Read {} of {} from Darknet weights.'.format(count, count +
                                                        remaining_weights))
     if remaining_weights > 0:
-        print('Warning: {} unused weights'.format(remaining_weights))
+        print('Warning: {} unused weights'.format(len(remaining_weights)))
 
     if args.plot_model:
         plot(model, to_file='{}.png'.format(output_root), show_shapes=True)
